@@ -1,0 +1,11 @@
+# ============================================================
+# MySQL 客户端凭据（仅本机备份脚本使用）
+# 权限要求: chmod 600 client.cnf   chown root:root client.cnf
+# 注意: 本文件绝不入 Git、绝不复制到其他机器
+# ============================================================
+[client]
+host=127.0.0.1
+port=3306
+user=<FILL_USER>
+password=<FILL_PASSWORD>
+default-character-set=utf8mb4

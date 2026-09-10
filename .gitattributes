@@ -1,0 +1,4 @@
+# 统一行尾，避免 Windows 检出成 CRLF 导致 Linux 上脚本报 bad interpreter
+*.sh   text eol=lf
+*.md   text eol=lf
+*.example text eol=lf

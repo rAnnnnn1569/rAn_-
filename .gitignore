@@ -1,0 +1,18 @@
+# 忽略本地环境与凭据（本仓库对外展示，凭据绝不入库）
+.idea/
+.vscode/
+.venv/
+__pycache__/
+*.pyc
+
+# 真实配置文件：只提交 .example 模板
+conf/client.cnf
+conf/backup.env.local
+*.local
+
+# 备份产物
+*.tar.gz
+*.sql
+*.sql.gz
+*.sha256
+*.pos
