@@ -62,12 +62,12 @@ PY="C:/Users/Administrator/.workbuddy/binaries/python/versions/3.13.12/python.ex
    → 脚本内置自动切块（900×500 网格 + 120px 重叠 + 放大到长边 1400），并且**主批跑完自动筛"高风险图"（无文字 / 面积≥120k 但行数≤15 / 宽高比≥4）做第二轮补测**。
 2. 🔴 **`is_private`/`is_global` 那套 IP 判断跟这里无关，但同类问题**：不要只看"有没有命中"，要报**覆盖率**（总图数 / 有文字 / 跳过 / 无文字）。本脚本实测 614 张 = 573 有文字 + 41 极小图标（放大 6 倍补测后确认无文字）。
 3. **极小图（<100px）不能直接当"没内容"丢掉**：脚本会跳过 OCR 但在报告里列出，必要时用 6 倍放大补测（实测 41 张里只有 1 张 98×20 有字：「开启智能发送」）。
-4. **模糊检索防 OCR 误读**：只搜全串 `bd.zwbds.com` 不够，要再搜 `zwbd` / `wbds` / `bds` / `.com:8` 等片段。实测就是靠搜 `zwbd` 才把第二处（表格里的 `bd.zwbds.com`）捞出来。
+4. **模糊检索防 OCR 误读**：只搜全串 `bd.example.com` 不够，要再搜 `example` / `xample` / `ample` / `.com:8` 等片段。实测就是靠搜 `example` 才把第二处（表格里的 `bd.example.com`）捞出来。
 5. **视觉二次确认不可省**：OCR 置信度 0.88~0.93 也要**裁切放大后亲眼看一眼**（`PIL` crop + `resize×5` + `LANCZOS`）。命中结论要附截图证据。
 6. **OCR 会把账号名认成域名片段**：`zwbdkj`、`zwbdcs` 是平台**用户名**（不是域名），别误报。必须回原图确认上下文。
 7. **本机 Bash 工具 PATH 残缺**（`tail`/`sleep`/`dirname` 都 `command not found`）→ 命令里别用管道和 `sleep`；等后台任务用 `python -c "import time; time.sleep(N)"`。脚本输出**重定向到文件再 Read**。
 8. **写 `.docx` 时若 WPS 开着该文件会被独占锁**（`PermissionError [WinError 32]`)；读不受影响，OCR 扫描随时可做。
-9. **文本层别漏的通道**：`word/_rels/document.xml.rels`（外部超链接）、`docProps/*.xml`（文档属性/作者）、`w:instrText`（域代码，如 `XE` 索引项）、`wp:docPr@descr`（替代文字）、`word/embeddings/*`（嵌套 OLE，需递归当 zip 打开）。实例：备案资料 656 个条目里正文只出现 3 次 `iot.zwbd.com.cn`，其余通道干净。
+9. **文本层别漏的通道**：`word/_rels/document.xml.rels`（外部超链接）、`docProps/*.xml`（文档属性/作者）、`w:instrText`（域代码，如 `XE` 索引项）、`wp:docPr@descr`（替代文字）、`word/embeddings/*`（嵌套 OLE，需递归当 zip 打开）。实例：备案资料 656 个条目里正文只出现 3 次 `iot.example.com`，其余通道干净。
 10. 🔴 **说清"子串匹配还是精确匹配"，并做三级归一化**（2026-09-23 冉哥追问后补的）。
    - 脚本用的是**子串包含**（`in` / `count`），**不是精确等值** —— 它比精确匹配**更宽**，所以"0 命中"结论更强。报告里要主动讲明口径，别让用户以为是 `==` 比较。
    - 但子串匹配有**自己的盲区**：关键词被拆开就漏。典型：`bd.zwb` 和 `ds.com` 分在两个 `w:r`；字中间夹了空格/零宽字符（U+200B）/全角句点（`．`）；跨元素拼接。

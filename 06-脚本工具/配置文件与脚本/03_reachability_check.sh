@@ -46,4 +46,4 @@ sudo tcpdump -nn -i $iport host $ip >> $filepath
 
 
 #筛选出unreachable的ip
-grep "unreachable" 10.80.0.142 | awk -F " " '{print $7}'| sort | uniq
+grep "unreachable" 10.255.0.142 | awk -F " " '{print $7}'| sort | uniq

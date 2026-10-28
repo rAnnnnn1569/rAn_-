@@ -62,7 +62,7 @@ if __name__ == "__main__":
     parser.add_argument("--base", default="bd.zwbds.com:8088/cgo8", help="平台地址")
     parser.add_argument("--user", default="gxdsfjg_zf", help="用户名")
     parser.add_argument("--pwd", default="CHANGE_ME", help="用户密码")
-    parser.add_argument("--plate", default="桂LB7178", help="车牌号")
+    parser.add_argument("--plate", default="桂A00000", help="车牌号")
     parser.add_argument("--color", default="2", help="颜色编码")
     parser.add_argument("--channel", default="", help="播放通道(实时)，如 1,2")
     parser.add_argument("--maxchannelnum", default="", help="通道最大值(实时)")
