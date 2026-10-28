@@ -59,7 +59,7 @@ def build_alarm(base, user, pwd, plate, color, alarmtype, alarmflag, alarmtime):
 if __name__ == "__main__":
     now = datetime.now().strftime("%Y%m%d%H%M%S")
     parser = argparse.ArgumentParser(description="生成车安达三种 URL")
-    parser.add_argument("--base", default="bd.zwbds.com:8088/cgo8", help="平台地址")
+    parser.add_argument("--base", default="bd.example.com:8088/cgo8", help="平台地址")
     parser.add_argument("--user", default="gxdsfjg_zf", help="用户名")
     parser.add_argument("--pwd", default="CHANGE_ME", help="用户密码")
     parser.add_argument("--plate", default="桂A00000", help="车牌号")
