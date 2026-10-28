@@ -12,6 +12,7 @@
 | [`mysql备份恢复/`](mysql备份恢复/) | MySQL 全量 + binlog 增量 + 一键恢复（PITR） | 含 `README.md` 部署说明与 `conf/` 配置模板 |
 | [`大容量分层分批备份.sh`](大容量分层分批备份.sh) | 大容量目录"分层 + 分批 + 断点续传"备份 | 适合源盘有坏道 / 带宽受限 / 几十 GB 以上的场景 |
 | [`Windows日志自动打包推送.ps1.example`](Windows日志自动打包推送.ps1.example) | Windows 双机日志自动压缩推送（tar + robocopy + 任务计划） | 纯系统内置组件，无第三方依赖；**复制后改名为 `.ps1` 并另存为 UTF-8 带 BOM** |
+| [`gx_log_backup/`](gx_log_backup/) | **同上场景的完整工具集**：部署 README + 端到端 SOP + 主脚本模板 | 比单文件模板多了"一次性准备"与故障对照表，适合从零搭一套 |
 | [`配置文件与脚本/`](配置文件与脚本/) | 生产环境整理出的配置与运维脚本 | nginx 代理 / docker-compose 编排 / iptables 幂等下发 / 链路巡检告警 |
 
 ---
@@ -50,6 +51,9 @@ HOST=user@host SRC_BASE=/opt/app bash 大容量分层分批备份.sh ./backup al
 ---
 
 ## 三、Windows 双机日志自动打包推送
+
+> 完整工具集见 [`gx_log_backup/`](gx_log_backup/)（部署 README + 端到端 SOP + 主脚本模板）；
+> 下面这份是精简模板，适合快速看懂整体结构。
 
 `Windows日志自动打包推送.ps1.example` —— 源机把业务日志目录压缩后，自动推送到同网段目标机的共享目录。
 
