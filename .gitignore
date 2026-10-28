@@ -16,3 +16,9 @@ conf/backup.env.local
 *.sql.gz
 *.sha256
 *.pos
+
+# 可执行脚本：仓库只放 .example 模板，本地实例不入库
+*.ps1
+*.psm1
+*.bat
+*.cmd

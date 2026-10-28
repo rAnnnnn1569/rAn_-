@@ -11,6 +11,7 @@
 |---|---|---|
 | [`mysql备份恢复/`](mysql备份恢复/) | MySQL 全量 + binlog 增量 + 一键恢复（PITR） | 含 `README.md` 部署说明与 `conf/` 配置模板 |
 | [`大容量分层分批备份.sh`](大容量分层分批备份.sh) | 大容量目录"分层 + 分批 + 断点续传"备份 | 适合源盘有坏道 / 带宽受限 / 几十 GB 以上的场景 |
+| [`Windows日志自动打包推送.ps1.example`](Windows日志自动打包推送.ps1.example) | Windows 双机日志自动压缩推送（tar + robocopy + 任务计划） | 纯系统内置组件，无第三方依赖；**复制后改名为 `.ps1` 并另存为 UTF-8 带 BOM** |
 
 ---
 
@@ -47,7 +48,39 @@ HOST=user@host SRC_BASE=/opt/app bash 大容量分层分批备份.sh ./backup al
 
 ---
 
-## 三、写脚本的几条自定规则
+## 三、Windows 双机日志自动打包推送
+
+`Windows日志自动打包推送.ps1.example` —— 源机把业务日志目录压缩后，自动推送到同网段目标机的共享目录。
+
+```cmd
+REM 1) 复制模板并改名（.example 只是为了避免带真实路径的实例入库）
+copy Windows日志自动打包推送.ps1.example D:\Scripts\push_log_archive.ps1
+REM    ⚠️ 另存为 UTF-8 with BOM，否则 PS 5.1 按 GBK 解析中文路径 → 报"源目录不存在"
+
+REM 2) 改脚本里的 <平台目录> / <平台日志目录> / <目标机IP> / <共享名>
+
+REM 3) 先预演（只压缩不传输）
+powershell -NoProfile -ExecutionPolicy Bypass -File D:\Scripts\push_log_archive.ps1 -DryRun
+
+REM 4) 注册任务（每天 02:00 触发，脚本内 60 小时闸门 → 实际 2.5 天一次）
+schtasks /Create /TN "日志备份推送" /TR "powershell.exe -NoProfile -ExecutionPolicy Bypass -File D:\Scripts\push_log_archive.ps1" /SC DAILY /ST 02:00 /RU <源机服务账号> /RP * /RL HIGHEST /F
+```
+
+**五个设计取舍**：
+
+1. **零依赖**——只用 `tar.exe` + `robocopy` + `schtasks`，不装 Python、不装第三方工具。
+2. **先压本地再推网络**——压缩过程不直接写网络路径，网络抖动不会污染压缩耗时。
+3. **频率靠脚本闸门**——任务计划没有"每 2.5 天"周期（硬设 `/SC HOURLY /MO 60` 会时间漂移），所以"每天 02:00 触发 + 脚本内 60 小时闸门"。
+4. **失败不记账**——只在传输成功后写时间戳，失败次日 02:00 自动重试，不会"失败一次等两天半"。
+5. **退出码语义**——`robocopy` 的 0~7 全算成功，≥8 才失败；写成 `-ne 0` 会误判。
+
+> 🔴 **最容易踩的是前置条件**：`.ps1` 必须是 **UTF-8 带 BOM**。PowerShell 5.1 对无 BOM 的文件按 ANSI(GBK) 解析，脚本里的中文路径会变乱码，运行时提示"源目录不存在"——**而目录明明就在那儿**。
+
+**SMB 连通排障**（错误 5 / 找不到网络路径 / 445 超时）见 [`../05-故障复盘/Windows双机日志自动推送-SMB连通排障SOP.md`](../05-故障复盘/Windows双机日志自动推送-SMB连通排障SOP.md)，那里按"链路 → 安全组 → 主机防火墙 → 共享名 → 权限"五层给了解法。
+
+---
+
+## 四、写脚本的几条自定规则
 
 给自己定下的底线，也是"脚本能交给别人跑"的前提：
 

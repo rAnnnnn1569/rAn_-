@@ -1,0 +1,167 @@
+﻿# ============================================================================
+# 模板文件：复制为 push_log_archive.ps1 后再编辑
+#
+# 🔴 复制后必须【另存为 UTF-8 带 BOM】，否则 PowerShell 5.1 会按 ANSI(GBK)
+#    解析，脚本里的中文路径变乱码，运行时表现为"源目录不存在"——
+#    而目录明明就在那儿。这是本脚本唯一但致命的前置条件。
+#
+# 🔴 首次使用前必须把下面所有 <占位符> 换成本机实际值：
+#    <平台目录> / <平台日志目录> / <目标机IP> / <共享名>
+# ============================================================================
+#Requires -Version 3.0
+<#
+.SYNOPSIS
+    Windows 双机日志自动压缩推送（源机 -> 目标机共享目录）。
+
+.DESCRIPTION
+    纯系统内置组件：tar.exe 压缩 + robocopy 传输 + schtasks 调度，**无第三方依赖**。
+
+    设计要点：
+      1. 先压到本地暂存区，再推网络路径 —— 压缩过程不直接写网络盘；
+      2. 频率靠"每天触发 + 脚本内 60 小时闸门"实现（任务计划不支持 2.5 天周期）；
+      3. **失败不写时间戳** —— 次日自动重试，不会"失败一次等两天半"；
+      4. robocopy 退出码 0~7 都算成功，>=8 才是失败。
+
+.PARAMETER Source
+    要打包的源目录，整体压缩成一个 zip，保留顶层目录结构。
+
+.PARAMETER Target
+    目标机共享目录。**必须是 UNC 路径**（\\<IP>\<共享名>）——
+    目标机上的 L:\ 之类是它自己的本地盘符，跨机访问只能走 UNC。
+
+.PARAMETER KeepDays
+    目标端保留天数，超期的旧包自动删除。
+
+.PARAMETER MinIntervalHours
+    与上次成功至少间隔多少小时，不足则跳过。60 = 2.5 天。
+
+.PARAMETER Force
+    忽略间隔闸门，强制执行一次。
+
+.PARAMETER DryRun
+    只压缩不传输，并把 zip 留在暂存区供检查。
+
+.EXAMPLE
+    powershell -NoProfile -ExecutionPolicy Bypass -File push_log_archive.ps1 -DryRun
+    powershell -NoProfile -ExecutionPolicy Bypass -File push_log_archive.ps1 -Force
+
+.NOTES
+    配套踩坑与排障方法论见：
+    ../../05-故障复盘/Windows双机日志自动推送-SMB连通排障SOP.md
+#>
+[CmdletBinding()]
+param(
+    [string]$Source    = 'D:\<平台目录>\Log\Top809External\<平台日志目录>',
+    [string]$Target    = '\\<目标机IP>\<共享名>',
+    [string]$Stage     = 'D:\<平台目录>\Log\_log_stage',
+    [string]$LogFile   = 'D:\<平台目录>\Log\_log_push.log',
+    [string]$RoboLog   = 'D:\<平台目录>\Log\_log_robocopy.log',
+    [string]$StateFile = 'D:\<平台目录>\Log\_log_lastrun.txt',
+    [int]$KeepDays     = 30,
+    [int]$MinIntervalHours = 60,
+    [switch]$Force,
+    [switch]$DryRun
+)
+
+$ErrorActionPreference = 'Stop'
+$ts = Get-Date
+
+function Write-Log {
+    param([string]$Message)
+    $line = '[{0}] {1}' -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'), $Message
+    Write-Host $line
+    try { Add-Content -LiteralPath $LogFile -Value $line -Encoding UTF8 } catch { }
+}
+
+try {
+    Write-Log '===== 任务开始 ====='
+
+    # ---- 1. 间隔闸门：距上次成功不足 MinIntervalHours 就跳过 ----------------
+    #    任务计划没有"每 2.5 天"这种周期，只能每天触发后在这里拦一道。
+    if (-not $DryRun -and -not $Force -and (Test-Path -LiteralPath $StateFile)) {
+        $lastRun = $null
+        try {
+            $raw = (Get-Content -LiteralPath $StateFile -Raw).Trim()
+            $lastRun = [datetime]::Parse($raw, [System.Globalization.CultureInfo]::InvariantCulture)
+        } catch { }
+        if ($lastRun) {
+            $gapHours = ((Get-Date) - $lastRun).TotalHours
+            if ($gapHours -lt $MinIntervalHours) {
+                Write-Log ('距上次成功 ' + [math]::Round($gapHours, 1) + ' 小时，未满 ' + $MinIntervalHours + ' 小时，本次跳过（要强制执行加 -Force）')
+                exit 0
+            }
+        }
+    }
+
+    if (-not (Test-Path -LiteralPath $Source)) { throw ('源目录不存在: ' + $Source) }
+    if (-not (Test-Path -LiteralPath $Stage)) { New-Item -ItemType Directory -Path $Stage -Force | Out-Null }
+
+    # ---- 2. 压缩到本地暂存区 ------------------------------------------------
+    # 注意：GetFileName / GetDirectoryName 而不是 Split-Path -Leaf。
+    #       Split-Path 的 -LiteralPath 参数集不支持 -Leaf/-Parent，会直接报
+    #       "无法使用指定的命名参数解析参数集"。
+    $leaf    = [System.IO.Path]::GetFileName($Source)
+    $parent  = [System.IO.Path]::GetDirectoryName($Source)
+    $zipName = '日志备份_{0}.zip' -f $ts.ToString('yyyyMMdd_HHmm')
+    $zip     = Join-Path $Stage $zipName
+    if (Test-Path -LiteralPath $zip) { Remove-Item -LiteralPath $zip -Force }
+
+    $tar = Get-Command tar.exe -ErrorAction SilentlyContinue
+    if ($tar) {
+        Write-Log ('压缩中 (tar.exe): ' + $Source)
+        & $tar.Source -a -c -f $zip -C $parent $leaf
+        if ($LASTEXITCODE -ne 0) { throw ('tar 压缩失败，退出码 ' + $LASTEXITCODE) }
+    }
+    else {
+        Write-Log ('压缩中 (Compress-Archive): ' + $Source)
+        Compress-Archive -LiteralPath $Source -DestinationPath $zip -CompressionLevel Optimal -Force
+    }
+
+    if (-not (Test-Path -LiteralPath $zip)) { throw '压缩产物不存在，压缩步骤异常' }
+    $bytes = (Get-Item -LiteralPath $zip).Length
+    if ($bytes -ge 1MB) { $sizeText = '{0:N1} MB' -f ($bytes / 1MB) }
+    else                { $sizeText = '{0:N0} KB' -f ($bytes / 1KB) }
+    Write-Log ('压缩完成: ' + $zip + '  ' + $sizeText)
+
+    if ($DryRun) {
+        Write-Log 'DryRun 模式：已跳过传输与远端清理'
+        exit 0
+    }
+
+    # ---- 3. 传输 ------------------------------------------------------------
+    if (-not (Test-Path -LiteralPath $Target)) {
+        throw ('目标路径不可访问: ' + $Target + ' —— 检查共享是否开放、凭据是否已用 cmdkey 保存')
+    }
+
+    Write-Log ('传输中 -> ' + $Target)
+    # robocopy 的日志单独放一个文件：它按控制台 OEM 代码页(GBK)输出，
+    # 与主日志的 UTF-8 混在一个文件里会互相污染成乱码。
+    robocopy $Stage $Target $zipName /R:2 /W:5 /NP /NJH /NJS /LOG+:$RoboLog
+    # 0~7 都算成功（1=有文件被复制, 2=多了一个文件, 3=更新了文件, 4/5=有差异, 6/7=额外文件）
+    if ($LASTEXITCODE -ge 8) { throw ('robocopy 失败，退出码 ' + $LASTEXITCODE + '（>=8 才是失败）') }
+    Write-Log '传输完成'
+
+    # ---- 4. 清理暂存 -------------------------------------------------------
+    Remove-Item -LiteralPath $zip -Force
+    Write-Log '本地暂存已清理'
+
+    # ---- 5. 目标端保留策略 -------------------------------------------------
+    $cut = $ts.AddDays(-1 * $KeepDays)
+    $old = Get-ChildItem -LiteralPath $Target -Filter '日志备份_*.zip' -File -ErrorAction SilentlyContinue |
+           Where-Object { $_.LastWriteTime -lt $cut }
+    foreach ($f in $old) {
+        Remove-Item -LiteralPath $f.FullName -Force
+        Write-Log ('删除过期备份: ' + $f.Name)
+    }
+
+    # ---- 6. 记账（只在成功后写，失败次日自动重试）-------------------------
+    Write-Log ('===== 任务成功，保留最近 ' + $KeepDays + ' 天 =====')
+    (Get-Date).ToString('o') | Set-Content -LiteralPath $StateFile -Encoding UTF8
+    Write-Log ('已记录本次执行时间 -> ' + $StateFile)
+
+    exit 0
+}
+catch {
+    Write-Log ('!!!!! 任务失败: ' + $_.Exception.Message)
+    exit 1
+}
