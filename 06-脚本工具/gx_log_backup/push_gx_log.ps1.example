@@ -1,0 +1,114 @@
+﻿#Requires -Version 3.0
+<#
+  广西第三方监管平台日志 —— 每日打包推送
+  源  : D:\Cgo8\Log\Top809External\中-广西行业服务平台_36-136-118-126-11009zw
+  目标: \\192.0.2.88\广西日志备份
+  用法: powershell -NoProfile -ExecutionPolicy Bypass -File push_gx_log.ps1
+        加 -DryRun 只压缩、不传输
+
+  注意: 本文件必须保存为 UTF-8 带 BOM，否则 PS 5.1 按 ANSI(GBK) 解析，中文路径变乱码
+#>
+[CmdletBinding()]
+param(
+    [string]$Source  = 'D:\Cgo8\Log\Top809External\中-广西行业服务平台_36-136-118-126-11009zw',
+    [string]$Target  = '\\192.0.2.88\广西日志备份',
+    [string]$Stage   = 'D:\Cgo8\Log\_gx_stage',
+    [string]$LogFile = 'D:\Cgo8\Log\_gx_push.log',
+    [string]$StateFile = 'D:\Cgo8\Log\_gx_lastrun.txt',
+    [int]$KeepDays   = 30,
+    [int]$MinIntervalHours = 60,
+    [switch]$Force,
+    [switch]$DryRun
+)
+
+$ErrorActionPreference = 'Stop'
+$ts = Get-Date
+
+function Write-Log {
+    param([string]$Message)
+    $line = '[{0}] {1}' -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'), $Message
+    Write-Host $line
+    try { Add-Content -LiteralPath $LogFile -Value $line -Encoding UTF8 } catch { }
+}
+
+try {
+    Write-Log '===== 任务开始 ====='
+
+    # 间隔闸门：距上次成功不足 MinIntervalHours 小时则跳过（定时任务按天触发，靠这里控制实际频率）
+    if (-not $DryRun -and -not $Force -and (Test-Path -LiteralPath $StateFile)) {
+        $lastRun = $null
+        try {
+            $raw = (Get-Content -LiteralPath $StateFile -Raw).Trim()
+            $lastRun = [datetime]::Parse($raw, [System.Globalization.CultureInfo]::InvariantCulture)
+        } catch { }
+        if ($lastRun) {
+            $gapHours = ((Get-Date) - $lastRun).TotalHours
+            if ($gapHours -lt $MinIntervalHours) {
+                Write-Log ('距上次成功 ' + [math]::Round($gapHours, 1) + ' 小时，未满 ' + $MinIntervalHours + ' 小时，本次跳过（要强制执行加 -Force）')
+                exit 0
+            }
+        }
+    }
+
+    if (-not (Test-Path -LiteralPath $Source)) { throw ('源目录不存在: ' + $Source) }
+    if (-not (Test-Path -LiteralPath $Stage)) { New-Item -ItemType Directory -Path $Stage -Force | Out-Null }
+
+    $leaf    = [System.IO.Path]::GetFileName($Source)
+    $parent  = [System.IO.Path]::GetDirectoryName($Source)
+    $zipName = '广西行业服务平台_{0}.zip' -f $ts.ToString('yyyyMMdd_HHmm')
+    $zip     = Join-Path $Stage $zipName
+    if (Test-Path -LiteralPath $zip) { Remove-Item -LiteralPath $zip -Force }
+
+    $tar = Get-Command tar.exe -ErrorAction SilentlyContinue
+    if ($tar) {
+        Write-Log ('压缩中 (tar.exe): ' + $Source)
+        & $tar.Source -a -c -f $zip -C $parent $leaf
+        if ($LASTEXITCODE -ne 0) { throw ('tar 压缩失败，退出码 ' + $LASTEXITCODE) }
+    }
+    else {
+        Write-Log ('压缩中 (Compress-Archive): ' + $Source)
+        Compress-Archive -LiteralPath $Source -DestinationPath $zip -CompressionLevel Optimal -Force
+    }
+
+    if (-not (Test-Path -LiteralPath $zip)) { throw '压缩产物不存在，压缩步骤异常' }
+    $bytes = (Get-Item -LiteralPath $zip).Length
+    if ($bytes -ge 1MB) { $sizeText = '{0:N1} MB' -f ($bytes / 1MB) }
+    else                { $sizeText = '{0:N0} KB' -f ($bytes / 1KB) }
+    Write-Log ('压缩完成: ' + $zip + '  ' + $sizeText)
+
+    if ($DryRun) {
+        Write-Log 'DryRun 模式：已跳过传输与远端清理'
+        exit 0
+    }
+
+    if (-not (Test-Path -LiteralPath $Target)) {
+        throw ('目标路径不可访问: ' + $Target + ' —— 检查共享是否开放、凭据是否已用 cmdkey 保存')
+    }
+
+    Write-Log ('传输中 -> ' + $Target)
+    robocopy $Stage $Target $zipName /R:2 /W:5 /NP /NJH /NJS /LOG+:$LogFile
+    if ($LASTEXITCODE -ge 8) { throw ('robocopy 失败，退出码 ' + $LASTEXITCODE) }
+    Write-Log '传输完成'
+
+    Remove-Item -LiteralPath $zip -Force
+    Write-Log '本地暂存已清理'
+
+    $cut = $ts.AddDays(-1 * $KeepDays)
+    $old = Get-ChildItem -LiteralPath $Target -Filter '广西行业服务平台_*.zip' -File -ErrorAction SilentlyContinue |
+           Where-Object { $_.LastWriteTime -lt $cut }
+    foreach ($f in $old) {
+        Remove-Item -LiteralPath $f.FullName -Force
+        Write-Log ('删除过期备份: ' + $f.Name)
+    }
+
+    Write-Log ('===== 任务成功，保留最近 ' + $KeepDays + ' 天 =====')
+
+    (Get-Date).ToString('o') | Set-Content -LiteralPath $StateFile -Encoding UTF8
+    Write-Log ('已记录本次执行时间 -> ' + $StateFile)
+
+    exit 0
+}
+catch {
+    Write-Log ('!!!!! 任务失败: ' + $_.Exception.Message)
+    exit 1
+}
