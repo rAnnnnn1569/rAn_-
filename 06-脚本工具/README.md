@@ -12,6 +12,7 @@
 | [`mysql备份恢复/`](mysql备份恢复/) | MySQL 全量 + binlog 增量 + 一键恢复（PITR） | 含 `README.md` 部署说明与 `conf/` 配置模板 |
 | [`大容量分层分批备份.sh`](大容量分层分批备份.sh) | 大容量目录"分层 + 分批 + 断点续传"备份 | 适合源盘有坏道 / 带宽受限 / 几十 GB 以上的场景 |
 | [`Windows日志自动打包推送.ps1.example`](Windows日志自动打包推送.ps1.example) | Windows 双机日志自动压缩推送（tar + robocopy + 任务计划） | 纯系统内置组件，无第三方依赖；**复制后改名为 `.ps1` 并另存为 UTF-8 带 BOM** |
+| [`配置文件与脚本/`](配置文件与脚本/) | 生产环境整理出的配置与运维脚本 | nginx 代理 / docker-compose 编排 / iptables 幂等下发 / 链路巡检告警 |
 
 ---
 
@@ -80,7 +81,32 @@ schtasks /Create /TN "日志备份推送" /TR "powershell.exe -NoProfile -Execut
 
 ---
 
-## 四、写脚本的几条自定规则
+## 四、生产配置与运维脚本
+
+[`配置文件与脚本/`](配置文件与脚本/) —— 从真实生产环境整理出来的 9 份配置与脚本。
+
+| 文件 | 看点 |
+|---|---|
+| `01_nginx-proxy.conf` | 业务反代 + 附件转对象存储，带**按域名防盗链** |
+| `02_docker-compose_gateway.yaml` | 代理网关 + JT809 转发器：`network_mode: host`、挂载编译好的 DLL、官方运行时镜像 |
+| `03_reachability_check.sh` | 按 **IP 第二段自动选抓包网卡**，再筛 `unreachable` 目标 |
+| `04_iptables_forward.sh` | DNAT/SNAT 规则下发：**幂等封装 + 端口变更检测**（`-C` 查重、端口模糊化比对旧规则） |
+| `05_url_sign.py` | 接口签名 = `MD5(MD5(pwd) + t)`，生成实时/历史/报警附件三类 URL |
+| `06_docker-compose_zabbix.yaml` | zabbix 监控栈编排，口令走 docker secrets |
+| `07_zabbix_server.conf` | zabbix_server 主配置全量参数 |
+| `08_link_monitor.py` | 链路巡检：**两次采样比对** → 机器人告警 |
+| `09_schtasks_link_monitor.sh` | 巡检脚本的 Windows 计划任务注册 |
+
+**为什么值得看**：这几份文件里的取舍都是"在真实约束下做出来的"——
+host 网络换来性能却把端口冲突风险推给编排顺序；挂载编译产物省掉整条 CI 却把构建责任转移给宿主机；
+`04` 用"端口模糊化比对"化解了"规则要改但线上在跑，直接删会断流"的两难。
+
+> 🔴 **脱敏范围只限两类**：服务器 IP（公网稳定 1:1 映射到 RFC 5737 文档段；私网保留网络段位，因为 `03` 的抓包网卡 dispatch 依赖 IP 第二段）与口令/Token（数据库口令、命令行默认口令、机器人 Webhook UUID）。
+> 域名、平台名、容器名、部署路径等**一律保留原样**——这些正是配置文件的可读性所在，换成角色名反而看不出它在干嘛。
+
+---
+
+## 五、写脚本的几条自定规则
 
 给自己定下的底线，也是"脚本能交给别人跑"的前提：
 

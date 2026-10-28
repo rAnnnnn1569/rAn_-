@@ -1,0 +1,203 @@
+# =============================================================================
+# Docker Compose 配置文件 - 中卫北斗 GPS 平台服务编排
+# 版本：3.2（兼容 Docker Engine 17.12.0+）
+# 说明：该文件定义了平台中多个微服务的容器化部署方式，当前仅启用代理网关
+#       和广西政府（GXZF）的 JT809 转发服务，其余地区服务已临时停用。
+# =============================================================================
+
+version: '3.2'
+
+services:
+  # ============================== 1. 代理网关服务 ==============================
+  # 功能：作为整个平台的入口网关，负责请求路由、鉴权、限流等前置处理。
+  # 容器名固定为 proxyServer，便于其他服务或运维脚本通过名称引用。
+  pserver:
+    # 强制指定容器名，避免 docker-compose 自动生成带随机后缀的名称（如 project_pserver_1）
+    # 这样可以用 docker logs proxyServer 直接查看日志，不用先查容器ID
+    container_name: proxyServer
+    
+    # 基础镜像：微软官方 .NET Core 2.1 运行时（ASP.NET Core）
+    # 注意：这是运行时镜像（不含 SDK），体积约 180MB，适合生产环境
+    # cetrdpd/ 可能是公司内部镜像仓库前缀（如 Harbor 或阿里云 ACR）
+    image: cetrdpd/dotnet:2.1-aspnetcore-runtime
+    
+    # 重启策略：always 表示无论容器因何退出（崩溃、宿主机重启）都会自动拉起
+    # 生产环境标准配置，确保网关服务 7x24 小时高可用
+    restart: always
+    
+    # 数据卷挂载（Volumes）
+    volumes:
+      # type: bind 表示绑定挂载，将宿主机目录直接映射到容器内
+      # 优势：修改宿主机代码后重启容器即可更新服务，不用重新构建镜像
+      # 风险：宿主机目录必须存在且包含完整的发布文件，否则容器启动失败
+      - type: bind
+        source: /cet/src/proxyServer/   # 宿主机上的发布文件目录（DLL 和配置文件）
+        target: /app/                   # 容器内的工作目录（dotnet 会在这里找 DLL）
+      
+      # 挂载宿主机时区文件，解决容器内日志时间默认 UTC（晚 8 小时）的问题
+      # 这样日志里打印的时间就和北京时间一致，方便排查问题
+      - type: bind
+        source: /etc/localtime
+        target: /etc/localtime
+    
+    # 容器启动命令：相当于在终端执行 dotnet xxx.dll
+    # 该 DLL 是网关服务的入口程序集，包含 Main() 方法
+    command: ["dotnet", "Zyt.GpsPlatform.Api.GT.ServerProxy.dll"]
+    
+    # 日志驱动配置
+    logging:
+      driver: "json-file"              # Docker 默认的日志驱动，以 JSON 格式存储
+      options:
+        max-size: "100m"               # 单个日志文件最大 100MB，防止磁盘被写满
+                                       # 注意：未设置 max-file，默认会一直轮转，建议配合 logrotate 使用
+    
+    # 网络模式：host 表示容器直接使用宿主机网络栈，不拥有独立 IP
+    # 优点：网络性能接近原生，不用做端口映射（-p 参数）
+    # 缺点：容器内监听的端口直接绑定在宿主机网卡上，存在端口冲突风险
+    # 适用场景：网关需要高性能且端口固定的场景
+    network_mode: host
+
+  # ============================== 2. 广西政府 JT809 转发服务 ==============================
+  # 功能：对接广西政府（GXZF）的上级平台，实现 JT/T 809 协议的数据转发
+  # 转发内容包括：车辆定位信息、报警信息、车辆静态信息等
+  # 当前唯一启用的地区转发服务，其余地区服务均已被注释（见下方）
+  gxzfServer:
+    container_name: transmiterGXzf
+    
+    image: cetrdpd/dotnet:2.1-aspnetcore-runtime
+    
+    restart: always
+    
+    volumes:
+      - type: bind
+        source: /cet/src/transmiterGXzf/   # 广西政府转发服务的发布文件目录
+        target: /app/
+      - type: bind
+        source: /etc/localtime
+        target: /etc/localtime
+    
+    # 注意：该 DLL 和四川、广西等地区的转发服务使用同一个 DLL
+    # 说明该 DLL 通过配置文件（appsettings.json）或环境变量区分不同地区
+    # 不同地区的区别在于：上级平台 IP、端口、接入码、加密密钥（M1/IA1/IC1）等参数
+    command: ["dotnet", "Zyt.GpsPlatform.Api.GT.JT809TransmitterService.dll"]
+    
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "100m"
+    
+    network_mode: host
+
+  # ============================== 以下服务均已停用（注释） ==============================
+  # 注意：这些服务在功能上都是 JT809 转发器，但针对不同地区/客户，
+  # 当前仅启用 gxzfServer，其余均被注释，表明这些实例可能已迁移或暂停。
+  # 注释掉的原因可能是：
+  # 1. 资源节省（每个容器占用内存和 CPU）
+  # 2. 分区部署（其他地区服务运行在别的服务器上）
+  # 3. 灰度切换（用新服务替换旧服务，如 gxzfServer 取代 guanxiServer）
+
+  # -------------------------------------------------------------------------
+  # 原 ADAS 转发服务（可能用于浙江或主动安全数据转发，具体看业务含义）
+  # adasServer:
+  #   container_name: transmiterZfAdas
+  #   image: cetrdpd/dotnet:2.1-aspnetcore-runtime
+  #   restart: always
+  #   volumes:
+  #     - type: bind
+  #       source: /cet/src/transmiterZfAdas/
+  #       target: /app/
+  #     - type: bind
+  #       source: /etc/localtime
+  #       target: /etc/localtime
+  #   command: ["dotnet", "Zyt.GpsPlatform.Api.GT.JT809TransmitterService.dll"]
+  #   logging:
+  #     driver: "json-file"
+  #     options:
+  #       max-size: "100m"
+  #   network_mode: host
+
+  # -------------------------------------------------------------------------
+  # 原四川地区转发服务（对接四川省运管局平台，按四川地标要求转发）
+  # sichuanServer:
+  #   container_name: transmiterSichuan
+  #   image: cetrdpd/dotnet:2.1-aspnetcore-runtime
+  #   restart: always
+  #   volumes:
+  #     - type: bind
+  #       source: /cet/src/transmiterSichuan/
+  #       target: /app/
+  #     - type: bind
+  #       source: /etc/localtime
+  #       target: /etc/localtime
+  #   command: ["dotnet", "Zyt.GpsPlatform.Api.GT.JT809TransmitterService.dll"]
+  #   logging:
+  #     driver: "json-file"
+  #     options:
+  #       max-size: "100m"
+  #   network_mode: host
+
+  # -------------------------------------------------------------------------
+  # 原广西通用转发服务（可能是旧版广西转发，已被 gxzfServer 替代）
+  # guanxiServer:
+  #   container_name: transmiterGuanxi
+  #   image: cetrdpd/dotnet:2.1-aspnetcore-runtime
+  #   restart: always
+  #   volumes:
+  #     - type: bind
+  #       source: /cet/src/transmiterGuanxi/
+  #       target: /app/
+  #     - type: bind
+  #       source: /etc/localtime
+  #       target: /etc/localtime
+  #   command: ["dotnet", "Zyt.GpsPlatform.Api.GT.JT809TransmitterService.dll"]
+  #   logging:
+  #     driver: "json-file"
+  #     options:
+  #       max-size: "100m"
+  #   network_mode: host
+
+  # -------------------------------------------------------------------------
+  # 原广西南宁地区转发服务（可能专门对接南宁市级平台）
+  # gxnnServer:
+  #   container_name: transmiterGXnn
+  #   image: cetrdpd/dotnet:2.1-aspnetcore-runtime
+  #   restart: always
+  #   volumes:
+  #     - type: bind
+  #       source: /cet/src/transmiterGXnn/
+  #       target: /app/
+  #     - type: bind
+  #       source: /etc/localtime
+  #       target: /etc/localtime
+  #   command: ["dotnet", "Zyt.GpsPlatform.Api.GT.JT809TransmitterService.dll"]
+  #   logging:
+  #     driver: "json-file"
+  #     options:
+  #       max-size: "100m"
+  #   network_mode: host
+  
+  # =============================================================================
+# 运维注意事项（未写入代码，但非常重要）：
+# =============================================================================
+# 1. 端口冲突风险：
+#    所有服务均使用 network_mode: host，如果未来启用多个转发服务，
+#    必须确保每个容器内监听的端口不同（如 transmiterGXzf 用 9091，
+#    transmiterSichuan 用 9092），否则容器启动会因端口占用失败。
+#
+# 2. 挂载目录依赖：
+#    source 指定的宿主机目录必须存在且包含完整的发布文件（DLL 和配置），
+#    否则容器会因找不到入口 DLL 而一直重启（CrashLoopBackOff）。
+#
+# 3. 配置文件管理：
+#    JT809TransmitterService.dll 被多个服务共用，说明各地区配置
+#    通过 appsettings.json 或环境变量区分，需确保每个地区的配置文件
+#    正确配置了上级平台的 IP、端口、接入码、加密密钥（M1/IA1/IC1）。
+#
+# 4. 启动顺序依赖：
+#    虽然 pserver 和 gxzfServer 都是 host 网络模式，但如果有依赖关系
+#    （如转发服务需要网关的鉴权），需通过健康检查或外部脚本控制启动顺序。
+#
+# 5. 日志轮转：
+#    当前仅限制了 max-size: 100m，未设置 max-file，建议配合 logrotate
+#    或 Docker 全局日志配置，防止日志文件无限堆积。
+# =============================================================================
